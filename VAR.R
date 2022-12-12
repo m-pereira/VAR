@@ -1,16 +1,12 @@
 source("functions.R")
-library(magrittr)
 library(GetBCBData)
-library(ipeadatar)
 library(lubridate)
-library(tidyr)
-library(dplyr)
+library(tidyverse)
 library(tsibble)
-library(purrr)
 library(forecast)
 library(ggplot2)
 library(vars)
-
+library(timetk)
 ## importing -------------
 
 # PIB mensal - Valores correntes - R$ milhões (BCB)
@@ -32,6 +28,18 @@ df_bcb <- GetBCBData::gbcbd_get_series(
   ) %>%
   dplyr::rename("date" = "ref.date") %>%
   dplyr::mutate(date = tsibble::yearmonth(.data$date))
+
+## visualize ------------------------
+df_bcb %>%
+  mutate(date = as.Date(date)) %>%
+  pivot_longer(cols = pib_mensal:cambio) %>%
+  plot_time_series(
+  .date_var = date,
+  .value = value,
+  .facet_vars = name,
+  .facet_ncol = 2
+  )
+
 
 ## diff --------------
 vars_ndiffs <- df_bcb %>%
@@ -56,22 +64,25 @@ df_bcb
 
 ## graph ---------------
 df_bcb %>%
-  tidyr::pivot_longer(-"date") %>%
-  ggplot2::ggplot() +
-  ggplot2::aes(x = lubridate::as_date(date), y = value) +
-  ggplot2::geom_line() +
-  ggplot2::facet_wrap(~name, scales = "free")
+  mutate(date = as.Date(date)) %>%
+  pivot_longer(cols = pib_mensal:ipca) %>%
+  plot_time_series(
+    .date_var = date,
+    .value = value,
+    .facet_vars = name,
+    .facet_ncol = 3
+  )
 
-## VAR ----------------
-
+# VAR ----------------
+### Estimar nlags ----------------------
 lags_var <- vars::VARselect(
   y = df_bcb[-1],
   lag.max = 12,
   type = "const"
 )
-
-# Estimar modelo VAR
-fit_var <- vars::VAR(
+lags_var
+### Estimar modelo VAR---------------
+fit_var <- VAR(
   y = df_bcb[-1],
   p = lags_var$selection["AIC(n)"],
   type = "const",
@@ -80,7 +91,7 @@ fit_var <- vars::VAR(
 )
 fit_var
 
-irf_var <- vars::irf(
+irf_var <- irf(
   x = fit_var,
   impulse = "selic",
   response = "ipca",
@@ -97,12 +108,10 @@ df_irf <- data.frame(irf = irf_var$irf,
                      lags = lags)
 
 colnames(df_irf) <- c('irf', 'lower', 'upper', 'lags')
-
-number_ticks <- function(n) {function(limits) pretty(limits, n)}
 ggplot(data = df_irf,aes(x=lags,y=irf)) +
   geom_line(aes(y = upper), colour = 'lightblue2') +
   geom_line(aes(y = lower), colour = 'lightblue')+
-  geom_line(aes(y = irf), linewidht=.8)+
+  geom_line(aes(y = irf), linewidth=.8)+
   geom_ribbon(aes(x=lags, ymax=upper,
                   ymin=lower),
               fill="blue", alpha=.1) +
@@ -115,3 +124,17 @@ ggplot(data = df_irf,aes(x=lags,y=irf)) +
   geom_line(colour = 'black')+
   scale_x_continuous(breaks=number_ticks(13))+
   theme_bw()
+
+### avaliar -------------------------
+# residuo --------------
+serial.test(fit_var, lags.pt = 12, type  = "PT.asymptotic")
+serial.test(fit_var, lags.pt = 12, type  = "PT.adjusted")
+serial.test(fit_var, lags.pt = 12, type  = "BG")
+serial.test(fit_var, lags.pt = 12, type  = "ES")
+normality.test(fit_var)
+arch.test(fit_var, lags.multi = 12)
+# decomposição da variância ------------
+fevd.fit <- fevd(fit_var)
+fevd.fit$pib_mensal
+fevd.fit$selic
+fevd.fit$ipca

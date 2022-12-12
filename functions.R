@@ -1,3 +1,4 @@
+number_ticks <- function(n) {function(limits) pretty(limits, n)}
 
 report_ndiffs <- function (
     x,
